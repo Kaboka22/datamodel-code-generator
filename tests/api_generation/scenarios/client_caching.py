@@ -419,7 +419,10 @@ def _miss(exchange: Exchange, call: Callable[[], Any]) -> Any:
 
 
 def _unstored(cache: Caching, api: Any, exchange: Exchange, lines: list[str]) -> None:
-    """Return responses that must not be stored, removing the entries they supersede, and keep entries on errors."""
+    """Return responses that must not be stored, removing the entries they supersede, and keep entries on errors.
+
+    A private response naming fields is stored, and is fetched last so that it answers no other case.
+    """
     helper = api.protocols.users.profile
     for label, response, limits in (
         ("no-store", user(1, **{"cache-control": "no-store, max-age=60"}), None),
@@ -429,7 +432,6 @@ def _unstored(cache: Caching, api: Any, exchange: Exchange, lines: list[str]) ->
         ("repeated", user(1, **{"cache-control": "max-age=1, max-age=2"}), None),
         ("valued public", user(1, **{"cache-control": "public=1, max-age=60"}), None),
         ("unquoted private", user(1, **{"cache-control": "private=x, max-age=60"}), None),
-        ("quoted private", user(1, **{"cache-control": 'private="a, b", max-age=60'}), None),
         ("bad quoting", user(1, **{"cache-control": 'private="a'}), None),
         ("too large", user(1, **{"cache-control": "max-age=60"}), 5),
         ("unlisted status", user(1, status=203, **{"cache-control": "max-age=60"}), None),
@@ -442,6 +444,12 @@ def _unstored(cache: Caching, api: Any, exchange: Exchange, lines: list[str]) ->
         fetched(lines, label, partial(helper.fetch, userId=argument, cache_options=settings))
         exchange.respond(user(10))
         fetched(lines, f"{label} next", partial(helper.fetch, userId=argument))
+    exchange.respond(
+        user(10, etag='"s"', **{"cache-control": "max-age=0"}),
+        user(1, **{"cache-control": 'private="a, b", max-age=60'}),
+    )
+    for label in ("quoted private after stale", "quoted private", "quoted private stored"):
+        fetched(lines, label, partial(helper.fetch, userId=cache.user_id(10)))
     eleven = cache.user_id(11)
     exchange.respond(
         user(11, **{"cache-control": "max-age=0"}, etag='"k"'),
