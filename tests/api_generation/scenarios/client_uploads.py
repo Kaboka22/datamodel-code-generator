@@ -34,10 +34,11 @@ from tests.api_generation.support.client_runtime import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncIterator, Callable, Mapping
     from types import ModuleType
 
 _CONTENT: Final = b"0123456789"
+_CHUNKS: Final = {"files.upload": 4, "files.finish": 8, "files.put": 4}
 _PAST: Final = "Wed, 21 Oct 2015 07:28:00 GMT"
 _FUTURE: Final = "2999-01-01T00:00:00Z"
 
@@ -223,12 +224,17 @@ class _Reentrant(io.BytesIO):
 
 
 class _Uploads(Harness):
-    """A generated upload package's public modules and the create arguments its helpers take."""
+    """A generated upload package's public modules, the create arguments its helpers take, and their chunk sizes."""
 
-    def __init__(self, package: ModuleType) -> None:
-        """Import the modules and the create arguments."""
+    def __init__(self, package: ModuleType, chunks: Mapping[str, int] = _CHUNKS) -> None:
+        """Import the modules and the create arguments, and keep each helper's chunk size as its client default."""
         super().__init__(package)
         self.tus = self.argument("createFile", "header", "Tus-Resumable", "1.0.0")
+        self.chunks = {name: self.uploads(chunk_bytes=size) for name, size in chunks.items()}
+
+    def client_options(self, **settings: Any) -> dict[str, Any]:
+        """Return client keywords that retry at once and upload in the helpers' chunk sizes, with any other settings."""
+        return super().client_options(**{"helper_defaults": self.chunks, **settings})
 
     @staticmethod
     def source(content: bytes = _CONTENT) -> Any:
@@ -679,7 +685,7 @@ def _resumes(harness: _Uploads, api: Any, server: _Server, exchange: Exchange, l
     for label, change in (
         ("an unknown member", {"other": 1}),
         ("a confirmed offset past the content", {"confirmed": 11}),
-        ("a chunk over the server maximum", {"chunk": 5}),
+        ("a chunk of no bytes", {"chunk": 0}),
         ("an unknown phase", {"phase": "paused"}),
         ("an unknown delivery", {"phase": "unknown", "delivery": "NOT_SENT"}),
         ("a complete phase", {"phase": "complete", "confirmed": 10}),
@@ -976,7 +982,7 @@ def upload_compression(package: ModuleType, lines: list[str]) -> None:
     """Compress declared upload ranges while undeclared operations stay plain."""
     harness, exchange, server = _Uploads(package), Exchange(lines), _Server()
     source = harness.source()
-    with exchange.client() as native, package.Client(http_client=native) as api:
+    with exchange.client() as native, package.Client(http_client=native, helper_defaults=harness.chunks) as api:
         helper = api.protocols.files.upload
         exchange.respond(*(server for _ in range(12)))
         handle = step(lines, "start gzip", lambda: helper.start(source, Tus_Resumable=harness.tus))
@@ -1004,7 +1010,10 @@ def upload_compression(package: ModuleType, lines: list[str]) -> None:
 async def _async_upload_compression(harness: _Uploads, exchange: Exchange, server: _Server, lines: list[str]) -> None:
     """Apply declared gzip to asyncio upload entries and completed resumes."""
     source = _CONTENT
-    async with exchange.async_client() as native, harness.package.AsyncClient(http_client=native) as api:
+    async with (
+        exchange.async_client() as native,
+        harness.package.AsyncClient(http_client=native, helper_defaults=harness.chunks) as api,
+    ):
         helper = api.protocols.files.upload
         exchange.respond(*(server for _ in range(12)))
         handle = await astep(lines, "async start gzip", lambda: helper.start(source, Tus_Resumable=harness.tus))
@@ -1113,7 +1122,7 @@ def uploads_oauth(package: ModuleType, lines: list[str]) -> None:
     """Close during completion OAuth, then upload again through a fresh client borrowing the same native client."""
     from concurrent.futures import ThreadPoolExecutor
 
-    harness = _Uploads(package)
+    harness = _Uploads(package, {"files.finish": 8})
     token, resource = _CompletionTransport(token=True), _CompletionTransport()
     credentials = _completion_provider(harness, token)
     native = httpx2.Client(transport=resource)

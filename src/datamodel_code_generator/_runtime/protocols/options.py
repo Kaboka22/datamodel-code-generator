@@ -47,7 +47,7 @@ _WS: Final = (
     ("pong_timeout", True, True, False),
     _SESSION,
 )
-_CACHE: Final = (("max_entry_bytes", False, False, False), ("max_ttl", True, False, False))
+_CACHE: Final = (("max_ttl", True, False, False),)
 _CACHE_METHODS: Final = ("get", "set", "delete")
 
 
@@ -153,9 +153,8 @@ class WSOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CacheOptions:
-    """Cache limits of one fetch: the largest body it stores and the cap on any entry's freshness."""
+    """Cache limits of one fetch: the cap on any entry's freshness."""
 
-    max_entry_bytes: int | UNSET = UNSET
     max_ttl: float | UNSET = UNSET
 
     def __post_init__(self) -> None:
