@@ -112,6 +112,7 @@ _ARGUMENTS: Final[dict[LeafStep, tuple[int, frozenset[tuple[str | None, str]]]]]
     "values": (2, frozenset({(None, "dict"), ("collections.abc", "Mapping"), ("typing", "Mapping")})),
 }
 _INTEGER_NUMBER: Final = frozenset({"integer", "number"})
+NO_SCALAR_KIND: Final = "A parameter value needs one unambiguous scalar kind"
 _WRAPPERS: Final = frozenset({"alias", "root"})
 
 
@@ -576,7 +577,7 @@ def _kind(planner: _WirePlanner, site: KindSite) -> LexicalKind:
         raise _PlanError(
             code="MC_PARAMETER_ENCODING",
             source=site.source,
-            message="A parameter value needs one unambiguous scalar kind",
+            message=NO_SCALAR_KIND,
         )
     return kind
 
@@ -649,6 +650,10 @@ class LexicalKinds:
     def of(self, value: TypeView, steps: tuple[LeafStep, ...] = ()) -> LexicalKind | None:
         """Return the kind of the leaf the steps reach from a type, such as a model field's type."""
         return _one_kind(set(self._leaves(self._stepped(value, steps), frozenset())), mixed=True)
+
+    def items(self, value: TypeView) -> TypeView | None:
+        """Return the type of the items of a list type, such as a repeated form member's, or None for any other."""
+        return self._argument(value, *_ARGUMENTS["items"])
 
     def _reached(self, location: SourceLocation, steps: tuple[LeafStep, ...]) -> TypeView | None:
         return self._stepped(self._types.get((location.document, location.pointer)), steps)

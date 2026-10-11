@@ -51,6 +51,9 @@ def services(server: ModuleType, models: ModuleType, calls: list[str]) -> dict[s
         def upload(self, **arguments: object) -> None:
             record("upload", arguments)
 
+        def search(self, **arguments: object) -> None:
+            record("search", arguments)
+
         async def post_raw(self, *, request: object) -> None:
             body = await request.body()
             calls.append(f"post_raw(request={request.method} {request.url.path}, body={body!r})")

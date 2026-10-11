@@ -24,7 +24,7 @@ from datamodel_code_generator._fastapi.routes import (
     placeholders,
     route_path,
 )
-from datamodel_code_generator._openapi_wire_plan import parameter_plans
+from datamodel_code_generator._openapi_wire_plan import NO_SCALAR_KIND, parameter_plans
 from datamodel_code_generator._runtime.model_codecs.media import FieldPlan, media_kind, normalize_media_type
 from datamodel_code_generator._target_contract import (
     BuiltinType,
@@ -52,7 +52,7 @@ if TYPE_CHECKING:
     from datamodel_code_generator._api_types import OperationSelector
     from datamodel_code_generator._fastapi.config import FastAPIConfig, HandlerMode, ResponseChoice
     from datamodel_code_generator._openapi_wire_plan import WirePlan
-    from datamodel_code_generator._runtime.model_codecs.media import JSONValue, MediaKind
+    from datamodel_code_generator._runtime.model_codecs.media import JSONValue, LexicalKind, MediaKind
     from datamodel_code_generator._runtime.model_codecs.parameters import ParameterLocation, ParameterPlan
     from datamodel_code_generator._target_contract import (
         FieldUseBinding,
@@ -130,6 +130,7 @@ _CONSTRUCTORS: Final[dict[tuple[str | None, str], tuple[str, BuiltinType | None]
     ("pydantic", "StrictStr"): ("constr", BuiltinType("str")),
 }
 _PLAIN_KEYWORDS: Final = _CONSTRAINTS | _DOCUMENTATION | {"default_factory"}
+_STYLED: Final = ("style", "explode", "allowReserved")
 _CONSTRAINED: Final = frozenset({"conbytes", "condecimal", "confloat", "conint", "constr"})
 _WRAPPERS: Final = frozenset({"root", "alias"})
 _HTTP_SCHEMES: Final[dict[str, SchemeKind]] = {"basic": "basic", "bearer": "bearer", "digest": "digest"}
@@ -224,14 +225,27 @@ class ParameterSpec:
     local: bool = True
 
 
+@dataclass(frozen=True, slots=True)
+class JsonPartSpec:
+    """One multipart member whose parts carry JSON: its wire name, the type of its value or items, and its repeats."""
+
+    name: str
+    type: TypeView
+    repeated: bool = False
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BodySpec:
-    """A request body: its media, requiredness, decision, and the plans a URL-encoded form adapter reads."""
+    """A request body: its media, requiredness, decision, and the plans a form adapter reads its members by.
+
+    A member is read as text in its field's kind, or, as a multipart member without one, as JSON.
+    """
 
     required: bool
     media: tuple[MediaSpec, ...]
     decision: Decision
     form_fields: tuple[FieldPlan, ...] = ()
+    json_parts: tuple[JsonPartSpec, ...] = ()
 
     @property
     def form(self) -> bool:
@@ -376,7 +390,7 @@ def _problem(
     return Diagnostic(
         code=code,
         severity="error",
-        stage="config" if code.startswith("E_") else "target",
+        stage="config" if code.startswith("E_") else "binding" if code.startswith("MC_") else "target",
         message=message,
         source_pointer=None if source is None else source.pointer,
         option_path=option_path,
@@ -427,8 +441,51 @@ def _uses(declaration: WireDeclaration) -> tuple[TypeUseId, ...]:
     return (*declaration.schemas, *(use for child in declaration.children for use in child.schemas))
 
 
+def _json_type(value: object) -> bool:
+    """Return whether an encoding's contentType names one JSON media type, rather than several or a range."""
+    try:
+        media_type = normalize_media_type(value) if isinstance(value, str) else ""
+    except ValueError:
+        return False
+    return "*" not in media_type.partition(";")[0] and media_kind(media_type) == "json"
+
+
+def _json_members(media: MediaSpec) -> frozenset[str | None]:
+    """Return the multipart members whose encodings send them as JSON: one JSON media type and no style.
+
+    A style leaves the media type unused, and a member holding files keeps its bytes.
+    """
+    parts = None if media.kind != "multipart" or media.use is None else media.use.parts
+    if parts is None:
+        return frozenset()
+    texts = {name for name, part in parts.members if not part.file}
+    return frozenset(
+        child.name
+        for child in media.declaration.children
+        if child.kind == "encoding"
+        and child.name in texts
+        and _json_type(fact(child, "contentType"))
+        and all(fact(child, key) is None for key in _STYLED)
+    )
+
+
+def _kind_source(media: MediaSpec, member: FieldUseBinding) -> SourceLocation:
+    """Return where a URL-encoded member without a kind is reported: its schema, or its items' as the walk recorded."""
+    encoding = None if media.use is None else media.use.encoding
+    recorded = next(
+        (
+            shape.kind.source
+            for shape in (() if encoding is None else encoding.form.members)
+            if shape.name == member.wire_name and shape.kind is not None
+        ),
+        None,
+    )
+    return recorded or member.schema or media.declaration.use_site
+
+
 def _encoded(media: MediaSpec) -> WireDeclaration | None:
     """Return the first form encoding that neither FastAPI's Form nor the form adapter reads."""
+    json_members = _json_members(media)
     return next(
         (
             child
@@ -436,7 +493,7 @@ def _encoded(media: MediaSpec) -> WireDeclaration | None:
             if child.kind == "encoding"
             and (
                 bool(child.children)
-                or fact(child, "contentType") is not None
+                or (fact(child, "contentType") is not None and child.name not in json_members)
                 or fact(child, "style") not in {None, "form"}
                 or fact(child, "explode") is False
                 or fact(child, "allowReserved") is True
@@ -1022,8 +1079,8 @@ class Planner:  # noqa: PLR0904
             for item in media:
                 if item.kind == "form" and (encoded := _encoded(item)) is not None:
                     self.unsupported(operation, (item,), f"the {encoded.name} encoding of ")
-            form = next((item.use for item in media if item.kind == "form" and item.use is not None), None)
-            return spec if form is None else replace(spec, form_fields=self.form_plans(form.type))
+            form = next((item for item in media if item.kind == "form" and item.use is not None), None)
+            return spec if form is None else replace(spec, form_fields=self.form_plans(form)[0])
         item = media[0]
         match item.kind:
             case "json":
@@ -1063,24 +1120,47 @@ class Planner:  # noqa: PLR0904
         if (encoded := _encoded(media)) is not None:
             self.unsupported(operation, (media,), f"the {encoded.name} encoding of ")
             return spec
+        fields, parts = self.form_plans(media)
         if media.kind == "form" and spec.required and self.form_model(use.type):
             return replace(spec, decision=Decision(transport="fastapi_native"))
-        return replace(spec, form_fields=self.form_plans(use.type))
+        return replace(spec, form_fields=fields, json_parts=parts)
 
-    def form_plans(self, value: TypeView | None) -> tuple[FieldPlan, ...]:
-        """Return the members a form adapter reads as text: each model field by wire name, as the field's type says."""
+    def form_plans(self, media: MediaSpec) -> tuple[tuple[FieldPlan, ...], tuple[JsonPartSpec, ...]]:
+        """Return how a form's members are read, each model field by wire name: as text, or as JSON parts.
+
+        A member whose type, or whose items' type, has a lexical kind is text of that kind. Any other, such as an
+        object, is JSON in a multipart body, as is a member whose encoding names JSON; a URL-encoded body carries
+        text alone, so generation stops for such a member, as it does for a parameter.
+        """
+        value = None if media.use is None else media.use.type
         members = self.members.get(value.symbol, ()) if isinstance(value, GeneratedSymbolType) else ()
-        return tuple(
-            self.form_field(member.wire_name, facts.type)
-            for member in members
-            if member.wire_name is not None and (facts := member.model_facts) is not None
-        )
+        json_members = _json_members(media)
+        fields: list[FieldPlan] = []
+        parts: list[JsonPartSpec] = []
+        for member in members:
+            if (
+                (name := member.wire_name) is None
+                or (facts := member.model_facts) is None
+                or member.member_kind == "additional_properties"
+            ):
+                continue
+            kind, leaf, repeated = self.lexical(facts.type)
+            if kind is not None and name not in json_members:
+                fields.append(FieldPlan(name, kind, repeated=repeated))
+            elif media.kind == "multipart":
+                parts.append(JsonPartSpec(name, leaf, repeated=repeated))
+            else:
+                self.problems.append(_problem("MC_PARAMETER_ENCODING", NO_SCALAR_KIND, _kind_source(media, member)))
+        return tuple(fields), tuple(parts)
 
-    def form_field(self, name: str, value: TypeView) -> FieldPlan:
-        """Return a form member's plan: repeated for a list, in the kind the model's type gives its text or items."""
-        repeated = self.kind(value) == "sequence"
-        kind = self.wire.kinds.of(value, ("items",) if repeated else ()) or "string"
-        return FieldPlan(name, kind, repeated=repeated)
+    def lexical(self, value: TypeView) -> tuple[LexicalKind | None, TypeView, bool]:
+        """Return the kind of a form member's text, the type that text or JSON is read as, and whether it repeats.
+
+        A list member repeats, each of its values read as one of its items.
+        """
+        item = self.wire.kinds.items(value)
+        leaf = value if item is None else item
+        return self.wire.kinds.of(leaf), leaf, item is not None
 
     def form_model(self, value: TypeView | None) -> bool:
         """Return whether FastAPI reads a type as a form model: a BaseModel of fields FastAPI reads from text.
@@ -1095,7 +1175,7 @@ class Planner:  # noqa: PLR0904
             and all(
                 (facts := member.model_facts) is not None
                 and self.kind(facts.type) is not None
-                and not (self.textless(facts.type) and self.form_field("", facts.type).kind != "string")
+                and not (self.textless(facts.type) and self.lexical(facts.type)[0] != "string")
                 for member in self.members.get(value.symbol, ())
             )
         )

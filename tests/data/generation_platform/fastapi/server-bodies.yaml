@@ -123,6 +123,25 @@ paths:
                 note: {type: string}
       responses:
         "204": {description: Done.}
+  /searches:
+    post:
+      operationId: search
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [filter]
+              properties:
+                filter: {$ref: "#/components/schemas/Filter"}
+                filters: {type: array, items: {$ref: "#/components/schemas/Filter"}}
+                tags: {type: array, items: {type: string}}
+                limit: {type: integer}
+            encoding:
+              tags: {contentType: application/json}
+      responses:
+        "204": {description: Done.}
   /checks:
     post:
       operationId: postCheck
@@ -171,3 +190,9 @@ components:
       properties:
         code: {type: string, x-python-type: int}
         scores: {type: array, items: {type: integer, minimum: 0}}
+    Filter:
+      type: object
+      additionalProperties: false
+      properties:
+        color: {type: string}
+        minAge: {type: integer, minimum: 0}

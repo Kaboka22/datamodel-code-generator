@@ -105,6 +105,22 @@ paths:
       responses:
         '204':
           description: An exploded form-data member naming another member.
+  /members:
+    post:
+      operationId: submitMembers
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                name: {type: string}
+                location: {type: object, properties: {x: {type: integer}}}
+                stops: {type: array, items: {type: object, properties: {x: {type: integer}}}}
+                level: {type: [integer, boolean]}
+      responses:
+        '204':
+          description: Members whose values no text of one kind writes.
   /cycle:
     get:
       operationId: getCycle

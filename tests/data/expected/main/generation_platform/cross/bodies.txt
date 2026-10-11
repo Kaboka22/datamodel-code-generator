@@ -85,6 +85,15 @@ upload
   upload(body=FieldUploadsPostRequest(file=b'\x00binary\xff', note='café'))
   < 204 -
   = None
+search
+  > POST /searches [multipart/form-data; boundary=<boundary>]
+  search(body=FieldSearchesPostRequest(filter=Filter(color='blue', minAge=3), filters=[Filter(color='a', minAge=None), Filter(color=None, minAge=2)], tags=['a', 'b c'], limit=5))
+  < 204 -
+  = None
+search refused parts
+  > POST /searches [multipart/form-data; boundary=<boundary>]
+  < 422 application/json
+  ! UnprocessableEntityError: Error code: 422 - {"detail":[{"type":"greater_than_equal","loc":["body","filter","minAge"],"msg":"<msg>"},{"type":"greater_than_equal","loc":["body","filters",1,"minAge"],"msg":"<msg>"}]} [operation_id='search', status_code=422, body=b'{"detail":[{"type":"greater_than_equal","loc":["body","filter","minAge"],"msg":"<msg>"},{"type":"greater_than_equal","loc":["body","filters",1,"minAge"],"msg":"<msg>"}]}', body_bytes=b'{"detail":[{"type":"greater_than_equal","loc":["body","filter","minAge"],"msg":"<msg>"},{"type":"greater_than_equal","loc":["body","filters",1,"minAge"],"msg":"<msg>"}]}', truncated=False]
 post_check
   > POST /checks [application/json]
   post_check(body=Check(code=7, scores=[1, 2]))

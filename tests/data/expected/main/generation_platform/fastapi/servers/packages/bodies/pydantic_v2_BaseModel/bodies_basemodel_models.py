@@ -28,6 +28,14 @@ class Check(BaseModel):
     scores: list[conint(ge=0)] | None = None
 
 
+class Filter(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    color: str | None = None
+    minAge: conint(ge=0) | None = None
+
+
 class FieldProfilesPostRequest(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
@@ -88,6 +96,13 @@ class FieldNativeFormsPostRequest(BaseModel):
 class FieldUploadsPostRequest(BaseModel):
     file: bytes
     note: str | None = None
+
+
+class FieldSearchesPostRequest(BaseModel):
+    filter: Filter
+    filters: list[Filter] | None = None
+    tags: list[str] | None = None
+    limit: int | None = None
 
 
 class FieldNotesPostRequest(RootModel[Item | None]):

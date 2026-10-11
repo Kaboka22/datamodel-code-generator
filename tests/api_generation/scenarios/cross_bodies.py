@@ -1,4 +1,4 @@
-"""Call the bodies server through its client: JSON, profiled and vendor JSON, forms, multipart files, text, and bytes.
+"""Call the bodies server through its client: JSON, forms, multipart files and JSON parts, text, and bytes.
 
 Each call names the media type it sends where the operation declares several, and the server reports the model or
 value its handler received with the media type it read.
@@ -34,6 +34,16 @@ def calls(kit: Kit) -> Calls:
         bodies.FieldPart("note", "café"),
     ))
     form = models.FieldFormsPostRequest(name="n", tags=["a", "b c"], count=2, extra=5)
+    search = models.FieldSearchesPostRequest(
+        filter=models.Filter(color="blue", minAge=3),
+        filters=[models.Filter(color="a"), models.Filter(minAge=2)],
+        tags=["a", "b c"],
+        limit=5,
+    )
+    refused = models.FieldSearchesPostRequest.model_construct(
+        filter=models.Filter.model_construct(minAge=-1),
+        filters=[models.Filter(), models.Filter.model_construct(minAge=-2)],
+    )
     return [
         ("post_item", lambda: api.post_item(body=models.Item(name="a"))),
         ("post_item without a body", api.post_item),
@@ -85,6 +95,8 @@ def calls(kit: Kit) -> Calls:
         ("post_form", lambda: api.post_form(body=form)),
         ("post_native_form", lambda: api.post_native_form(body=models.FieldNativeFormsPostRequest(name="n"))),
         ("upload", lambda: api.upload(body=upload)),
+        ("search", lambda: api.search(body=search)),
+        ("search refused parts", lambda: api.search(body=refused)),
         ("post_check", lambda: api.post_check(body=models.Check(code=7, scores=[1, 2]))),
         ("post_note null", lambda: api.post_note(body=models.FieldNotesPostRequest(None))),
         ("post_note item", lambda: api.post_note(body=models.FieldNotesPostRequest(models.Item(name="i")))),
