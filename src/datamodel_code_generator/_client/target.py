@@ -198,13 +198,9 @@ class ClientTarget:
 
 
 def _backend_dependencies(backend: CodecBackend, model_imports: frozenset[str]) -> tuple[str, ...]:
-    match backend:
-        case "pydantic_v2.BaseModel" | "pydantic_v2.dataclass":
-            return (pydantic_dependency(model_imports),)
-        case "msgspec.Struct":
-            return (MSGSPEC,)
-        case _:
-            return ()
+    if backend in {"pydantic_v2.BaseModel", "pydantic_v2.dataclass"}:
+        return (pydantic_dependency(model_imports),)
+    return (MSGSPEC,) if backend == "msgspec.Struct" else ()
 
 
 def _wire(request: TargetRequest, batch: GeneratedTypeContractBatch) -> WirePlan:
