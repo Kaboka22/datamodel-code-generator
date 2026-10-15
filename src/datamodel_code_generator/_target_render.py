@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Final
 
+from datamodel_code_generator.enums import TargetPydanticVersion, _pydantic_version_key
+from datamodel_code_generator.model.pydantic_v2.version import PYDANTIC_V2_MISSING_MINIMUM, target_supports
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
 
@@ -21,6 +24,10 @@ MODEL_DEPENDENCIES: Final = (
     ("ulid", "python-ulid>=3.2.1"),
     ("pendulum", "pendulum>=3.2"),
 )
+PYDANTIC_FLOOR: Final = "2.14.0"
+PYDANTIC_TARGET_MINIMUM: Final = PYDANTIC_FLOOR.rpartition(".")[0]
+PYDANTIC_BACKENDS: Final = frozenset({"pydantic_v2.BaseModel", "pydantic_v2.dataclass"})
+PYDANTIC_IMPORT_MINIMUMS: Final = (("pydantic.MISSING", PYDANTIC_V2_MISSING_MINIMUM),)
 _PLAN_DEFAULTS: Final[dict[str, object]] = {
     "style": None,
     "explode": False,
@@ -111,3 +118,34 @@ def model_dependencies(imported: frozenset[str]) -> tuple[str, ...]:
             if any(item == name or item.startswith(f"{name}.") for item in imported)
         )
     )
+
+
+def pydantic_target_problem(
+    backend: str, target: TargetPydanticVersion | None, *, sentinel: bool, implied: bool = False
+) -> str | None:
+    """Say what a package that requires pydantic needs of its target pydantic version, or None.
+
+    An explicit target older than the floor is refused, and so is an unset one whose models use the MISSING sentinel:
+    the models stay as a model-only run writes them, which imports MISSING from pydantic for a target of the floor. A
+    sentinel the target `implied` for the backend is named as such.
+    """
+    if backend not in PYDANTIC_BACKENDS or (
+        target_supports(target, PYDANTIC_TARGET_MINIMUM) and not (sentinel and target is None)
+    ):
+        return None
+    if sentinel:
+        reason = f", which it sets for {backend!r} models," if implied else ","
+        return (
+            f"needs model_config.target_pydantic_version {PYDANTIC_TARGET_MINIMUM} for --use-missing-sentinel{reason} "
+            "so that the models import MISSING from pydantic"
+        )
+    allowed = " or ".join(
+        repr(item.value) for item in TargetPydanticVersion if target_supports(item, PYDANTIC_TARGET_MINIMUM)
+    )
+    return f"needs a target pydantic version of {PYDANTIC_TARGET_MINIMUM} or later; leave it unset or use {allowed}"
+
+
+def pydantic_dependency(imported: frozenset[str]) -> str:
+    """Return the pydantic requirement: the tested floor, raised to the newest minimum of what the models import."""
+    minimums = (minimum for name, minimum in PYDANTIC_IMPORT_MINIMUMS if name in imported)
+    return f"pydantic>={max((PYDANTIC_FLOOR, *minimums), key=_pydantic_version_key)}"

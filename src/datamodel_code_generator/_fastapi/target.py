@@ -16,7 +16,7 @@ from datamodel_code_generator._fastapi.templates import FastAPITemplates
 from datamodel_code_generator._openapi_wire_plan import operation_uses, plan_wire
 from datamodel_code_generator._target_documents import shown
 from datamodel_code_generator._target_module import TypeNames
-from datamodel_code_generator._target_render import model_dependencies
+from datamodel_code_generator._target_render import model_dependencies, pydantic_dependency
 from datamodel_code_generator.enums import DataModelType
 
 if TYPE_CHECKING:
@@ -26,7 +26,8 @@ if TYPE_CHECKING:
     from datamodel_code_generator._openapi_codec_plan import PydanticBackend
     from datamodel_code_generator._openapi_wire_plan import CodecDiagnostic
 
-DEPENDENCIES: Final = ("fastapi>=0.141.1", "pydantic>=2.13.5", "typing-extensions>=4.16")
+FASTAPI: Final = "fastapi>=0.141.1"
+TYPING_EXTENSIONS: Final = "typing-extensions>=4.16"
 FORMS: Final = "python-multipart>=0.0.32"
 _BACKENDS: Final[dict[DataModelType, PydanticBackend]] = {
     DataModelType.PydanticV2BaseModel: "pydantic_v2.BaseModel",
@@ -69,6 +70,7 @@ class FastAPITarget:
         _check_links(plan, request)
         source = SourceDocument(request.lease)
         document = source.text(spec.contract for spec in plan.operations)
+        dependencies = _dependencies(plan, request.model_imports)
         renderer = ServerRenderer(
             config=config,
             backend=_BACKENDS[request.model_config.output_model_type],
@@ -80,12 +82,18 @@ class FastAPITarget:
             document=document,
             use_schema_description=request.model_config.use_schema_description,
             use_single_line_docstring=request.model_config.use_single_line_docstring,
+            dependencies=dependencies,
         )
         files = renderer.files()
         for problem in source.problems:
             output = shown(config.output, request.shown_root).as_posix()
             warnings.warn(f"{output}: {problem}", DocumentationAnnotationWarning, stacklevel=2)
-        return TargetRender(files=files, dependencies=_dependencies(plan, request.model_imports))
+        return TargetRender(
+            files=files,
+            dependencies=dependencies,
+            implementations=renderer.implementations(),
+            next_steps=renderer.next_steps(),
+        )
 
 
 def _check_links(plan: ServerPlan, request: TargetRequest) -> None:
@@ -121,7 +129,9 @@ def _dependencies(plan: ServerPlan, model_imports: frozenset[str]) -> tuple[str,
         for spec in plan.operations
     )
     return (
-        *DEPENDENCIES,
+        FASTAPI,
+        pydantic_dependency(model_imports),
+        TYPING_EXTENSIONS,
         *((FORMS,) if forms else ()),
         *model_dependencies(model_imports),
     )
